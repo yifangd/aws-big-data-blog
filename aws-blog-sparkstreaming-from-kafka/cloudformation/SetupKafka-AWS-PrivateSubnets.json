@@ -205,7 +205,7 @@
             "Tags":[  
                {  
                   "Key":"Name",
-                  "Value":"KafkaBrokerInPrivateSubnets",
+                  "Value":"KafkaBrokerInPrivateSubnets"
                }
             ],
             "UserData":{  

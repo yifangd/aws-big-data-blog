@@ -223,7 +223,7 @@
             "Tags":[  
                {  
                   "Key":"Name",
-                  "Value":"KafkaBrokerInPublicSubnets",
+                  "Value":"KafkaBrokerInPublicSubnets"
                }
             ],
             "UserData":{  
