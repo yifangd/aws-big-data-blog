@@ -1,0 +1,344 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AWS CloudFormation Template: This template creates 1 Kafka Zookeeper
+  and 1 Kafka Broker instances'
+Mappings:
+  AmiId:
+    ap-northeast-1:
+      AMI: ami-0dd8f963
+    ap-southeast-1:
+      AMI: ami-3f03c55c
+    ap-southeast-2:
+      AMI: ami-e0c19f83
+    eu-central-1:
+      AMI: ami-875042eb
+    eu-west-1:
+      AMI: ami-8b8c57f8
+    sa-east-1:
+      AMI: ami-27b3094b
+    us-east-1:
+      AMI: ami-2051294a
+    us-west-1:
+      AMI: ami-d1315fb1
+    us-west-2:
+      AMI: ami-775e4f16
+Outputs:
+  KafkaBrokerInfo:
+    Description: 'PrivateDnsName of KafkaBroker.
+
+      '
+    Value:
+      Fn::Join:
+      - ':'
+      - - Fn::GetAtt:
+          - KafkaBrokerInstance
+          - PrivateDnsName
+        - '9092'
+  ZookeeperInfo:
+    Description: 'PrivateDnsName of Zookeeper.
+
+      '
+    Value:
+      Fn::Join:
+      - ':'
+      - - Fn::GetAtt:
+          - KafkaZookeeperInstance
+          - PrivateDnsName
+        - '2181'
+Parameters:
+  BastionHostSSHSecurityGroupId:
+    Description: which you are likely to SSH into
+    Type: AWS::EC2::SecurityGroup::Id
+  KafkaDownloadURL:
+    Default: http://mirrors.advancedhosters.com/apache/kafka/0.8.2.1/kafka_2.9.2-0.8.2.1.tgz
+    Description: URL to download kafka tarball
+    Type: String
+  KafkaServerInstanceType:
+    AllowedValues:
+    - r3.xlarge
+    ConstraintDescription: must be a valid EC2 instance type.
+    Default: r3.xlarge
+    Description: KafkaBroker EC2 instance type
+    Type: String
+  KeyName:
+    AllowedPattern: '[-_ a-zA-Z0-9]*'
+    ConstraintDescription: can contain only alphanumeric characters, spaces, dashes
+      and underscores.
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instances
+    MaxLength: '64'
+    MinLength: '1'
+    Type: AWS::EC2::KeyPair::KeyName
+  SubnetCIDR:
+    AllowedPattern: '[a-zA-Z0-9]+\..+'
+    Default: 10.0.1.0/24
+    Description: CIDR Block for Private Subnet where Zookeepers and Kafka Brokers
+      will be deployed. ex:10.0.1.0/24
+    MaxLength: '18'
+    MinLength: '9'
+    Type: String
+  SubnetID:
+    Description: Subnet ID in your Virtual Private Cloud (VPC) for Zookeepers and
+      Kafka Brokers
+    Type: AWS::EC2::Subnet::Id
+  VPCId:
+    Description: VpcId of existing Virtual Private Cloud (VPC)
+    Type: AWS::EC2::VPC::Id
+  ZkeeperServerInstanceType:
+    AllowedValues:
+    - r3.large
+    ConstraintDescription: must be a valid EC2 instance type.
+    Default: r3.large
+    Description: Zookeeper EC2 instance type
+    Type: String
+Resources:
+  IAMProfile:
+    Properties:
+      Path: /
+      Roles:
+      - Ref: RootRole
+    Type: AWS::IAM::InstanceProfile
+  KafkaBrokerInstance:
+    DependsOn: KafkaZookeeperInstance
+    Metadata:
+      AWS::CloudFormation::Init:
+        config: {}
+      region:
+        Ref: AWS::Region
+      stack_name:
+        Ref: AWS::StackName
+    Properties:
+      BlockDeviceMappings:
+      - DeviceName: /dev/sda1
+        Ebs:
+          VolumeSize: '100'
+          VolumeType: gp2
+      IamInstanceProfile:
+        Ref: IAMProfile
+      ImageId:
+        Fn::FindInMap:
+        - AmiId
+        - Ref: AWS::Region
+        - AMI
+      InstanceType:
+        Ref: KafkaServerInstanceType
+      KeyName:
+        Ref: KeyName
+      NetworkInterfaces:
+      - DeleteOnTermination: 'true'
+        DeviceIndex: '0'
+        GroupSet:
+        - Ref: KafkaServerSecurityGroup
+        SubnetId:
+          Ref: SubnetID
+      Tags:
+      - Key: Name
+        Value: KafkaBrokerInPrivateSubnets
+      UserData:
+        Fn::Base64:
+          Fn::Join:
+          - ''
+          - - '#!/bin/bash -v
+
+              '
+            - '
+
+              yum -y install unzip java wget
+
+              '
+            - '
+
+              curl "https://s3.amazonaws.com/aws-cli/awscli-bundle.zip" -o "awscli-bundle.zip"
+
+              '
+            - 'unzip awscli-bundle.zip
+
+              '
+            - './awscli-bundle/install -b ~/bin/aws
+
+              '
+            - 'export PATH=~/bin:$PATH
+
+              '
+            - 'export ZOOKEEPER_ID=1
+
+              '
+            - 'su - root -c ''mkdir -p /app/kafka''
+
+              '
+            - 'wget '
+            - Ref: KafkaDownloadURL
+            - ' -P /app
+
+              '
+            - 'export file=`echo '
+            - Ref: KafkaDownloadURL
+            - ' | cut -f7 -d ''/''`
+
+              '
+            - 'tar -zxvf /app/$file -C /app/kafka
+
+              '
+            - 'su - root -c ''mkdir -p /tmp/kafka-logs''
+
+              '
+            - sed -i.bak "s/zookeeper.connect=.*/zookeeper.connect=
+            - Fn::GetAtt:
+              - KafkaZookeeperInstance
+              - PrivateIp
+            - ':2181/g" /app/kafka/kafka_2.9.2-0.8.2.1/config/server.properties
+
+              '
+            - 'sed -i ''s/Defaults    requiretty/Defaults    !requiretty/g'' /etc/sudoers
+
+              '
+            - 'sed -i ''s/KAFKA_JMX_OPTS="-D/KAFKA_JMX_OPTS="-Djava.net.preferIPv4Stack=true
+              -D/g'' /app/kafka/kafka_2.9.2-0.8.2.1/bin/kafka-run-class.sh
+
+              '
+            - 'su - root -c ''nohup /app/kafka/kafka_2.9.2-0.8.2.1/bin/kafka-server-start.sh
+              /app/kafka/kafka_2.9.2-0.8.2.1/config/server.properties > /dev/null
+              2>&1 &''
+
+              '
+    Type: AWS::EC2::Instance
+  KafkaServerSecurityGroup:
+    Properties:
+      GroupDescription: KafkaServer SG to allow access to/from Kafka Brokers and Zookeepers.
+      SecurityGroupIngress:
+      - CidrIp:
+          Ref: SubnetCIDR
+        FromPort: '0'
+        IpProtocol: tcp
+        ToPort: '65535'
+      - FromPort: '22'
+        IpProtocol: tcp
+        SourceSecurityGroupId:
+          Ref: BastionHostSSHSecurityGroupId
+        ToPort: '22'
+      VpcId:
+        Ref: VPCId
+    Type: AWS::EC2::SecurityGroup
+  KafkaZookeeperInstance:
+    Metadata:
+      AWS::CloudFormation::Init:
+        config: {}
+      region:
+        Ref: AWS::Region
+      stack_name:
+        Ref: AWS::StackName
+    Properties:
+      BlockDeviceMappings:
+      - DeviceName: /dev/sda1
+        Ebs:
+          VolumeSize: '30'
+          VolumeType: gp2
+      IamInstanceProfile:
+        Ref: IAMProfile
+      ImageId:
+        Fn::FindInMap:
+        - AmiId
+        - Ref: AWS::Region
+        - AMI
+      InstanceType:
+        Ref: ZkeeperServerInstanceType
+      KeyName:
+        Ref: KeyName
+      NetworkInterfaces:
+      - DeleteOnTermination: 'true'
+        DeviceIndex: '0'
+        GroupSet:
+        - Ref: KafkaServerSecurityGroup
+        SubnetId:
+          Ref: SubnetID
+      Tags:
+      - Key: Name
+        Value: ZooKeeperInPrivateSubnets
+      UserData:
+        Fn::Base64:
+          Fn::Join:
+          - ''
+          - - '#!/bin/bash -v
+
+              '
+            - '
+
+              yum -y install unzip java wget
+
+              '
+            - '
+
+              curl "https://s3.amazonaws.com/aws-cli/awscli-bundle.zip" -o "awscli-bundle.zip"
+
+              '
+            - 'unzip awscli-bundle.zip
+
+              '
+            - './awscli-bundle/install -b ~/bin/aws
+
+              '
+            - 'export PATH=~/bin:$PATH
+
+              '
+            - 'export ZOOKEEPER_ID=1
+
+              '
+            - 'su - root -c ''mkdir -p /app/kafka''
+
+              '
+            - 'wget '
+            - Ref: KafkaDownloadURL
+            - ' -P /app
+
+              '
+            - 'export file=`echo '
+            - Ref: KafkaDownloadURL
+            - ' | cut -f7 -d ''/''`
+
+              '
+            - 'tar -zxvf /app/$file -C /app/kafka
+
+              '
+            - 'su - root -c ''mkdir -p /tmp/zookeeper''
+
+              '
+            - 'echo $ZOOKEEPER_ID > /tmp/zookeeper/myid
+
+              '
+            - 'echo "initLimit=5
+
+              syncLimit=2" >> /app/kafka/kafka_2.9.2-0.8.2.1/config/zookeeper.properties
+
+              '
+            - 'sed -i ''s/Defaults    requiretty/Defaults    !requiretty/g'' /etc/sudoers
+
+              '
+            - 'sed -i ''s/KAFKA_JMX_OPTS="-D/KAFKA_JMX_OPTS="-Djava.net.preferIPv4Stack=true
+              -D/g'' /app/kafka/kafka_2.9.2-0.8.2.1/bin/kafka-run-class.sh
+
+              '
+            - 'su - root -c ''nohup /app/kafka/kafka_2.9.2-0.8.2.1/bin/zookeeper-server-start.sh
+              /app/kafka/kafka_2.9.2-0.8.2.1/config/zookeeper.properties > /dev/null
+              2>&1 &''
+
+              '
+    Type: AWS::EC2::Instance
+  RootRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+      - PolicyDocument:
+          Statement:
+          - Action: '*'
+            Effect: Allow
+            Resource: '*'
+          Version: '2012-10-17'
+        PolicyName: root
+    Type: AWS::IAM::Role
